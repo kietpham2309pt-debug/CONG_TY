@@ -427,6 +427,29 @@ function doPost(e) {
       const map = JSON.parse(json);
       return ghnJsonRes_({ ok: true, message: 'Set OMS_PRODUCT_MAP_JSON', entries: Object.keys(map).length });
     }
+    if (action === 'oms_probe') {
+      const path = e.parameter.path || '';
+      const qs = e.parameter.qs || '';
+      if (!path) return ghnJsonRes_({ ok: false, error: 'path required (vd /api/v1/locations/provinces)' });
+      const r = omsProbeEndpoint(path, qs);
+      return ghnJsonRes_(r);
+    }
+    if (action === 'oms_discover_locations') {
+      const r = discoverOmsLocationEndpoints();
+      return ghnJsonRes_({ ok: true, results: r });
+    }
+    if (action === 'oms_auto_fetch_locations') {
+      const r = autoFetchOmsLocations();
+      return ghnJsonRes_(r);
+    }
+    if (action === 'oms_auto_fetch_products') {
+      const r = autoFetchOmsProducts();
+      return ghnJsonRes_(r);
+    }
+    if (action === 'oms_fetch_provinces') {
+      const r = fetchAllOmsProvinces();
+      return ghnJsonRes_(r);
+    }
     if (action === 'cod_recon') {
       const r = runCodRecon();
       return ghnJsonRes_(r);

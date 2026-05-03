@@ -275,12 +275,23 @@ function lookupOmsProductId_(sku) {
 function lookupOmsLocation_(provinceName, districtName, wardName) {
   const provinceMap = readOmsMap_(OMS_PUSH_CFG_FIXED.PROP_PROVINCE_MAP);
   const districtMap = readOmsMap_(OMS_PUSH_CFG_FIXED.PROP_DISTRICT_MAP);
-  const wardMap = readOmsMap_(OMS_PUSH_CFG_FIXED.PROP_WARD_MAP);
-  return {
-    province_id: provinceMap[normalizeOmsName_(provinceName)] || null,
-    district_id: districtMap[normalizeOmsName_(districtName)] || null,
-    ward_id: wardMap[normalizeOmsName_(wardName)] || null,
-  };
+  const provN = normalizeOmsName_(provinceName);
+  const distN = normalizeOmsName_(districtName);
+  const wardN = normalizeOmsName_(wardName);
+
+  const province_id = provinceMap[provN] || null;
+  // Try province-prefixed key first, fallback to plain name
+  const district_id = districtMap[province_id + ':' + distN] || districtMap[distN] || null;
+
+  // Wards: lazy fetch nếu chưa có
+  let wardMap = readOmsMap_(OMS_PUSH_CFG_FIXED.PROP_WARD_MAP);
+  let ward_id = wardMap[district_id + ':' + wardN] || wardMap[wardN] || null;
+  if (!ward_id && district_id) {
+    wardMap = ensureWardsForDistrict_(district_id);
+    ward_id = wardMap[district_id + ':' + wardN] || wardMap[wardN] || null;
+  }
+
+  return { province_id, district_id, ward_id };
 }
 
 function readOmsMap_(propKey) {
@@ -368,6 +379,210 @@ function dryRunPushOms() {
     return { orderName: n, rowCount: groups[n].rows.length, payload: buildOmsPayload_(groups[n].rows, true) };
   });
   return { ok: true, count: orderNames.length, sample: samples, jwt_expiry: expInfo };
+}
+
+// ============================================================
+// AUTO-FETCH MAPPING FROM OMS API
+// ============================================================
+
+/**
+ * Probe 1 endpoint OMS bất kỳ với JWT — return status + body preview.
+ * Dùng để discover endpoint locations/products.
+ */
+function omsProbeEndpoint(path, queryString) {
+  const jwt = PropertiesService.getScriptProperties().getProperty(OMS_PUSH_CFG_FIXED.PROP_JWT);
+  if (!jwt) return { ok: false, error: 'OMS_JWT chưa set' };
+  const qs = queryString ? ('?' + queryString) : '';
+  const url = 'https://oms.onflow.vn' + path + qs;
+  try {
+    const res = UrlFetchApp.fetch(url, {
+      method: 'get',
+      headers: {
+        'Authorization': 'NH ' + jwt,
+        'system': 'oms',
+        'country': 'VN',
+        'lang': 'vi',
+        'Accept': 'application/json',
+      },
+      muteHttpExceptions: true,
+    });
+    const code = res.getResponseCode();
+    const body = res.getContentText();
+    return {
+      ok: code === 200,
+      code,
+      body_preview: body.slice(0, 2000),
+      body_size: body.length,
+    };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Endpoints CONFIRMED từ DevTools 03/05:
+ *   GET /api/v1/addresses/province/list                 (deduce — pattern)
+ *   GET /api/v1/addresses/district/list?province_id=X
+ *   GET /api/v1/addresses/ward/list?district_id=Y
+ *   GET /api/v1/products/list-variant-or-single?store_id=111&page=1&page_size=50&status=200,100
+ */
+
+function omsGet_(path, qs) {
+  const jwt = PropertiesService.getScriptProperties().getProperty(OMS_PUSH_CFG_FIXED.PROP_JWT);
+  if (!jwt) return { ok: false, error: 'OMS_JWT not set' };
+  const url = 'https://oms.onflow.vn' + path + (qs ? ('?' + qs) : '');
+  try {
+    const res = UrlFetchApp.fetch(url, {
+      method: 'get',
+      headers: {
+        'Authorization': 'NH ' + jwt,
+        'system': 'oms', 'country': 'VN', 'lang': 'vi',
+        'Accept': 'application/json',
+      },
+      muteHttpExceptions: true,
+    });
+    const code = res.getResponseCode();
+    const body = res.getContentText();
+    if (code !== 200) return { ok: false, code, body: body.slice(0, 500) };
+    try { return { ok: true, json: JSON.parse(body), size: body.length }; }
+    catch (err) { return { ok: false, error: 'parse: ' + err.message, body: body.slice(0, 500) }; }
+  } catch (err) { return { ok: false, error: err.message }; }
+}
+
+function fetchAllOmsProvinces() {
+  const r = omsGet_('/api/v1/addresses/province/list', 'country=VN&page_size=100');
+  if (!r.ok) return r;
+  const list = r.json.data || r.json.results || r.json;
+  if (!Array.isArray(list)) return { ok: false, error: 'not array', sample: JSON.stringify(r.json).slice(0, 300) };
+  const map = {};
+  list.forEach(function (p) {
+    const name = p.province_name || p.name;
+    if (name && p.id) {
+      map[normalizeOmsName_(name)] = p.id;
+      // Add code as alias (HCM, HN...)
+      if (p.code) map[normalizeOmsName_(p.code)] = p.id;
+    }
+  });
+  return { ok: true, count: Object.keys(map).length, map, raw_sample: list.slice(0, 3) };
+}
+
+function fetchOmsDistricts(provinceId) {
+  const r = omsGet_('/api/v1/addresses/district/list', 'province_id=' + provinceId);
+  if (!r.ok) return r;
+  const list = r.json.data || r.json.results || r.json;
+  if (!Array.isArray(list)) return { ok: false, error: 'not array' };
+  return { ok: true, list };
+}
+
+function fetchOmsWards(districtId) {
+  const r = omsGet_('/api/v1/addresses/ward/list', 'district_id=' + districtId);
+  if (!r.ok) return r;
+  const list = r.json.data || r.json.results || r.json;
+  if (!Array.isArray(list)) return { ok: false, error: 'not array' };
+  return { ok: true, list };
+}
+
+/**
+ * Bulk fetch toàn bộ provinces + districts (~63 calls). Wards = lazy on-demand.
+ * Save vào ScriptProperties:
+ *   OMS_PROVINCE_MAP_JSON: { "ha noi": 24, "hcm": 79, ... }
+ *   OMS_DISTRICT_MAP_JSON: { "<provinceId>:<districtName>": <districtId>, ... }
+ *     ← key có prefix province_id để tránh collision (vd "Quận 1" có ở nhiều tỉnh)
+ *   OMS_WARD_MAP_JSON: { "<districtId>:<wardName>": <wardId>, ... }
+ */
+function autoFetchOmsLocations() {
+  const props = PropertiesService.getScriptProperties();
+  const stats = { provinces: 0, districts: 0, wards: 0, errors: [] };
+
+  const provRes = fetchAllOmsProvinces();
+  if (!provRes.ok) return { ok: false, error: 'Fetch provinces fail', detail: provRes };
+  props.setProperty(OMS_PUSH_CFG_FIXED.PROP_PROVINCE_MAP, JSON.stringify(provRes.map));
+  stats.provinces = provRes.count;
+
+  // Inverse map để loop districts theo từng province
+  const districtMap = {};
+  const rawProv = omsGet_('/api/v1/addresses/province/list', 'country=VN&page_size=100');
+  const provList = rawProv.ok ? (rawProv.json.data || rawProv.json) : [];
+
+  provList.forEach(function (p, idx) {
+    if (!p.id) return;
+    if (idx > 0 && idx % 10 === 0) Utilities.sleep(500);
+    const dr = fetchOmsDistricts(p.id);
+    if (!dr.ok) { stats.errors.push({ province: p.id, error: dr.error || dr.code }); return; }
+    dr.list.forEach(function (d) {
+      const dname = d.district_name || d.name;
+      if (dname && d.id) {
+        const key = p.id + ':' + normalizeOmsName_(dname);
+        districtMap[key] = d.id;
+        // Plain name (no province prefix) — fallback nếu duplicate sẽ overwrite
+        districtMap[normalizeOmsName_(dname)] = d.id;
+        stats.districts++;
+      }
+    });
+    Utilities.sleep(150);
+  });
+  props.setProperty(OMS_PUSH_CFG_FIXED.PROP_DISTRICT_MAP, JSON.stringify(districtMap));
+
+  Logger.log('✅ Provinces: ' + stats.provinces + ', Districts: ' + stats.districts);
+  Logger.log('⏸ Wards lazy fetch on-demand (12k entries quá nhiều cho bulk)');
+  return { ok: true, stats, sample_provinces: Object.keys(provRes.map).slice(0, 5) };
+}
+
+/**
+ * Lazy fetch wards của 1 district + cache vào OMS_WARD_MAP_JSON.
+ * Gọi từ lookupOmsLocation_ khi cache miss.
+ */
+function ensureWardsForDistrict_(districtId) {
+  const props = PropertiesService.getScriptProperties();
+  const cached = readOmsMap_(OMS_PUSH_CFG_FIXED.PROP_WARD_MAP);
+  const sentinel = districtId + ':_loaded';
+  if (cached[sentinel]) return cached;
+  const wr = fetchOmsWards(districtId);
+  if (!wr.ok) return cached;
+  wr.list.forEach(function (w) {
+    const wname = w.ward_name || w.name;
+    if (wname && w.id) {
+      cached[districtId + ':' + normalizeOmsName_(wname)] = w.id;
+      cached[normalizeOmsName_(wname)] = w.id;  // fallback no district prefix
+    }
+  });
+  cached[sentinel] = 1;
+  props.setProperty(OMS_PUSH_CFG_FIXED.PROP_WARD_MAP, JSON.stringify(cached));
+  return cached;
+}
+
+/**
+ * Fetch products list (pagination), build SKU → product_id map.
+ */
+function autoFetchOmsProducts() {
+  const props = PropertiesService.getScriptProperties();
+  const map = {};
+  let page = 1;
+  const pageSize = 50;
+  let total = 0;
+  while (page <= 30) {
+    const qs = 'page=' + page + '&page_size=' + pageSize + '&status=200,100&store_id=' +
+               OMS_PUSH_CFG_FIXED.STORE_ID + '&conversion_currency=VND';
+    const r = omsGet_('/api/v1/products/list-variant-or-single', qs);
+    if (!r.ok) { Logger.log('Page ' + page + ' fail: ' + JSON.stringify(r)); break; }
+    const list = r.json.data || r.json.results || r.json;
+    if (!Array.isArray(list) || !list.length) break;
+    list.forEach(function (item) {
+      // Variants có thể nest — try common shapes
+      const sku = item.sku || (item.variant && item.variant.sku) || '';
+      const id = item.id || (item.variant && item.variant.id) || (item.product && item.product.id);
+      if (sku && id) {
+        map[String(sku).trim()] = id;
+        total++;
+      }
+    });
+    if (list.length < pageSize) break;
+    page++;
+    Utilities.sleep(300);
+  }
+  props.setProperty(OMS_PUSH_CFG_FIXED.PROP_PRODUCT_MAP, JSON.stringify(map));
+  Logger.log('✅ Products: ' + total + ' SKUs mapped');
+  return { ok: true, count: total, pages: page, sample: Object.keys(map).slice(0, 5) };
 }
 
 function setupOmsPushTrigger() {
