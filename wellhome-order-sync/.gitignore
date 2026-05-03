@@ -1,0 +1,25 @@
+# Apps Script clasp config (chứa scriptId — keep private)
+.clasp.json
+.clasprc.json
+
+# Node
+node_modules/
+package-lock.json
+
+# Wrangler local state
+.wrangler/
+.dev.vars
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+
+# Local secrets (KHÔNG commit)
+*.local.js
+secrets.js
+*.env
