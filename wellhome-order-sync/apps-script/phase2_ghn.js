@@ -394,6 +394,39 @@ function doPost(e) {
       PropertiesService.getScriptProperties().setProperty('OMS_PUSH_AUTH_PREFIX', prefix);
       return ghnJsonRes_({ ok: true, message: 'Set auth header', name, prefix });
     }
+    if (action === 'set_oms_jwt') {
+      const token = e.parameter.token || '';
+      if (!token || token.length < 50) return ghnJsonRes_({ ok: false, error: 'token required (>= 50 chars, dạng "NH eyJ..." hoặc "eyJ...")' });
+      // Cleanup prefix nếu user paste cả "NH eyJ..." hoặc "Bearer eyJ..."
+      const clean = String(token).replace(/^(NH|Bearer)\s+/i, '').trim();
+      PropertiesService.getScriptProperties().setProperty('OMS_JWT', clean);
+      // Decode expiry để confirm
+      const exp = decodeOmsJwtExpiry_(clean);
+      return ghnJsonRes_({ ok: true, message: 'Set OMS_JWT', length: clean.length, expiry: exp });
+    }
+    if (action === 'decode_oms_jwt') {
+      const jwt = PropertiesService.getScriptProperties().getProperty('OMS_JWT');
+      if (!jwt) return ghnJsonRes_({ ok: false, error: 'OMS_JWT chưa set' });
+      const exp = decodeOmsJwtExpiry_(jwt);
+      return ghnJsonRes_({ ok: true, expiry: exp });
+    }
+    if (action === 'set_oms_locations_map') {
+      const ptype = e.parameter.type || '';   // province | district | ward
+      const json = e.parameter.json || '';
+      if (['province','district','ward'].indexOf(ptype) < 0) return ghnJsonRes_({ ok: false, error: 'type required (province|district|ward)' });
+      try { JSON.parse(json); } catch (err) { return ghnJsonRes_({ ok: false, error: 'invalid JSON: ' + err.message }); }
+      const key = 'OMS_' + ptype.toUpperCase() + '_MAP_JSON';
+      PropertiesService.getScriptProperties().setProperty(key, json);
+      const map = JSON.parse(json);
+      return ghnJsonRes_({ ok: true, message: 'Set ' + key, entries: Object.keys(map).length });
+    }
+    if (action === 'set_oms_products_map') {
+      const json = e.parameter.json || '';
+      try { JSON.parse(json); } catch (err) { return ghnJsonRes_({ ok: false, error: 'invalid JSON: ' + err.message }); }
+      PropertiesService.getScriptProperties().setProperty('OMS_PRODUCT_MAP_JSON', json);
+      const map = JSON.parse(json);
+      return ghnJsonRes_({ ok: true, message: 'Set OMS_PRODUCT_MAP_JSON', entries: Object.keys(map).length });
+    }
     if (action === 'cod_recon') {
       const r = runCodRecon();
       return ghnJsonRes_(r);
