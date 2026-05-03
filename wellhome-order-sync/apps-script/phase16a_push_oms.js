@@ -23,6 +23,26 @@ const OMS_PUSH_KEYS = {
   EXTRA_HEADERS_JSON: 'OMS_PUSH_EXTRA_HEADERS_JSON',
 };
 
+// Defaults metadata captured từ DevTools 03/05 (response GET detail order 1913486):
+//   pickup_address.id = 44 (Kho N&H An Phú Đông, code PK100044)
+//   store.id = 111 (WELLHOME VIET NAM)
+//   courier = 16 (Tự Vận Chuyển — sof prefix)
+//   country=VN, currency=VND, platform=retail, order_type=b2c
+const OMS_PUSH_DEFAULTS = {
+  country: 'VN',
+  currency: 'VND',
+  platform: 'retail',
+  source: 'app',
+  order_type: 'b2c',
+  pickup_address: 44,
+  store: 111,
+  courier: 16,
+  fulfill_type: 2,
+  shipping_provider: 'normal',
+  tax_paid_by: 'sender',
+  fee_paid_by: 'sender',
+};
+
 function omsPushReadConfig_() {
   const props = PropertiesService.getScriptProperties();
   return {

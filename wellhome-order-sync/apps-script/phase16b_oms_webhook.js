@@ -61,15 +61,18 @@ const OMS_EVENT_LABELS = {
   'order_return.update_status':  null,
 };
 
-// Map status NUMBER → label tiếng Việt — best-guess theo logic shipping pipeline.
-// REFINE khi confirm với Mai Onflow. Status 215 đã observed trong test webhook.
-// Số ngoài map → hiển thị "FFM mã <N>" để user nhận diện cần update map.
+// Map status NUMBER → label tiếng Việt
+// CONFIRMED từ OMS DevTools 03/05:
+//   - status 300 = "Đã duyệt" (status_display)
+//   - payment_status 200 = "Đã thanh toán"
+//   - status 215 đã thấy trong webhook log (có thể là shipment.update_status — DIFFER với order status)
+// Còn lại đoán theo logic. Cần Mai Onflow confirm bảng đầy đủ.
 const OMS_STATUS_CODE_MAP = {
-  100: 'Đơn mới (chờ xác nhận)',
+  100: 'Đơn mới (chờ duyệt)',
   101: 'Đã xác nhận',
   105: 'Đang xử lý',
   110: 'Đã in tem',
-  150: 'Đã đóng gói (chờ shipper)',
+  150: 'Đã đóng gói',
   200: 'Đã tạo vận đơn',
   205: 'Đang chuẩn bị',
   210: 'Đang đóng gói',
@@ -77,10 +80,13 @@ const OMS_STATUS_CODE_MAP = {
   220: 'Shipper đã lấy',
   225: 'Đang giao',
   230: 'Đã giao',
-  300: 'Trả hàng',
-  305: 'Hoàn tất trả hàng',
-  400: 'Lỗi',
+  300: 'Đã duyệt',           // ← confirmed từ DevTools 03/05
+  305: 'Đã pick',
+  310: 'Đã pack',
+  400: 'Trả hàng',
+  405: 'Hoàn tất trả hàng',
   500: 'Hủy',
+  600: 'Lỗi',
 };
 
 // ============================================================
