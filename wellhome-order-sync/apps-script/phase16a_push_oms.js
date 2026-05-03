@@ -585,6 +585,230 @@ function autoFetchOmsProducts() {
   return { ok: true, count: total, pages: page, sample: Object.keys(map).slice(0, 5) };
 }
 
+/**
+ * Test header với endpoint cần auth — POST /orders/create với body invalid để chỉ check auth.
+ * Nếu auth pass → trả 400 (validation fail) hoặc 200.
+ * Nếu auth fail → trả 401/403.
+ */
+function testOmsApiKeyAuthOnPost() {
+  const props = PropertiesService.getScriptProperties();
+  const apiKey = props.getProperty('OMS_API_KEY');
+  if (!apiKey) return { ok: false, error: 'OMS_API_KEY not set' };
+
+  const url = 'https://oms.onflow.vn/api/v1/orders/create';
+  const baseHeaders = { 'system': 'oms', 'country': 'VN', 'lang': 'vi', 'Content-Type': 'application/json' };
+  const dummyBody = JSON.stringify({ store_id: 111, _test_auth_only: true });
+
+  const tries = [
+    { name: 'NO_AUTH (baseline)', extra: {} },
+    { name: 'X-API-Key',           extra: { 'X-API-Key': apiKey } },
+    { name: 'apikey',              extra: { 'apikey': apiKey } },
+    { name: 'Api-Key dash',        extra: { 'Api-Key': apiKey } },
+    { name: 'Auth ApiKey',         extra: { 'Authorization': 'ApiKey ' + apiKey } },
+    { name: 'Auth Bearer',         extra: { 'Authorization': 'Bearer ' + apiKey } },
+    { name: 'Auth NH',             extra: { 'Authorization': 'NH ' + apiKey } },
+    { name: 'X-Auth-Token',        extra: { 'X-Auth-Token': apiKey } },
+  ];
+
+  const results = [];
+  tries.forEach(function (t) {
+    const headers = Object.assign({}, baseHeaders, t.extra);
+    try {
+      const res = UrlFetchApp.fetch(url, {
+        method: 'post', headers, payload: dummyBody, muteHttpExceptions: true,
+      });
+      const code = res.getResponseCode();
+      const body = res.getContentText();
+      // 401/403 = auth fail. 400/422 = auth ok but validation fail. 200 = success.
+      const authPassed = (code !== 401 && code !== 403);
+      results.push({
+        pattern: t.name,
+        code,
+        auth_passed: authPassed,
+        body_preview: body.slice(0, 200),
+      });
+    } catch (err) {
+      results.push({ pattern: t.name, error: err.message });
+    }
+    Utilities.sleep(300);
+  });
+  return { ok: true, note: '401/403 = auth fail; 400 = auth ok validation fail; 200 = ok', results };
+}
+
+/**
+ * Test 7 header patterns với OMS_API_KEY 76 chars để xem có thay được JWT không.
+ * Mục đích: nếu API key permanent work → KHÔNG cần refresh JWT mỗi 24h.
+ */
+function testOmsApiKeyAuth() {
+  const props = PropertiesService.getScriptProperties();
+  const apiKey = props.getProperty('OMS_API_KEY');
+  if (!apiKey) return { ok: false, error: 'OMS_API_KEY not set' };
+
+  const baseUrl = 'https://oms.onflow.vn/api/v1/addresses/province/list?country=VN';
+  const baseHeaders = { 'system': 'oms', 'country': 'VN', 'lang': 'vi', 'Accept': 'application/json' };
+
+  const tries = [
+    { name: 'X-API-Key',           extra: { 'X-API-Key': apiKey } },
+    { name: 'apikey lowercase',     extra: { 'apikey': apiKey } },
+    { name: 'Api-Key dash',         extra: { 'Api-Key': apiKey } },
+    { name: 'Authorization ApiKey', extra: { 'Authorization': 'ApiKey ' + apiKey } },
+    { name: 'Authorization Bearer', extra: { 'Authorization': 'Bearer ' + apiKey } },
+    { name: 'Authorization NH',     extra: { 'Authorization': 'NH ' + apiKey } },
+    { name: 'X-Auth-Token',         extra: { 'X-Auth-Token': apiKey } },
+    { name: 'X-Onflow-API-Key',     extra: { 'X-Onflow-API-Key': apiKey } },
+  ];
+
+  const results = [];
+  tries.forEach(function (t) {
+    const headers = Object.assign({}, baseHeaders, t.extra);
+    try {
+      const res = UrlFetchApp.fetch(baseUrl, {
+        method: 'get', headers, muteHttpExceptions: true,
+      });
+      const code = res.getResponseCode();
+      const body = res.getContentText();
+      const hasData = body.indexOf('"province_name"') >= 0;
+      results.push({
+        pattern: t.name,
+        code,
+        works: code === 200 && hasData,
+        body_preview: body.slice(0, 150),
+      });
+    } catch (err) {
+      results.push({ pattern: t.name, error: err.message });
+    }
+    Utilities.sleep(200);
+  });
+  return { ok: true, results };
+}
+
+/**
+ * Discover login endpoint — try 7 paths × 2 body shapes.
+ * Email = op.dept@wellhome.asia (hardcode default), password = OMS_PASSWORD property.
+ */
+function discoverOmsLoginEndpoint() {
+  const props = PropertiesService.getScriptProperties();
+  const password = props.getProperty('OMS_PASSWORD');
+  const email = props.getProperty('OMS_EMAIL') || 'op.dept@wellhome.asia';
+  if (!password) return { ok: false, error: 'OMS_PASSWORD chưa set. Action set_oms_password&password=...' };
+
+  const endpoints = [
+    '/api/v1/auth/login',
+    '/api/v1/auth/token',
+    '/api/v1/auth/sign-in',
+    '/api/v1/users/login',
+    '/api/v1/login',
+    '/api/auth/login',
+    '/api/v1/auth/jwt/create',
+  ];
+  const bodyShapes = [
+    { email, password },
+    { username: email, password },
+    { email, password, country: 'VN' },
+  ];
+
+  const results = [];
+  endpoints.forEach(function (ep) {
+    bodyShapes.forEach(function (body) {
+      try {
+        const res = UrlFetchApp.fetch('https://oms.onflow.vn' + ep, {
+          method: 'post',
+          contentType: 'application/json',
+          headers: { 'system': 'oms', 'country': 'VN', 'lang': 'vi', 'Accept': 'application/json' },
+          payload: JSON.stringify(body),
+          muteHttpExceptions: true,
+        });
+        const code = res.getResponseCode();
+        const respBody = res.getContentText();
+        if (code !== 404 && code !== 405) {  // skip endpoints không tồn tại / sai method
+          const hasJwt = respBody.indexOf('access') >= 0 || respBody.indexOf('token') >= 0 || respBody.indexOf('eyJ') >= 0;
+          results.push({
+            endpoint: ep,
+            body_keys: Object.keys(body).join(','),
+            code,
+            has_jwt_marker: hasJwt,
+            preview: respBody.slice(0, 250),
+          });
+        }
+      } catch (err) {
+        // skip
+      }
+      Utilities.sleep(200);
+    });
+  });
+  return { ok: true, results };
+}
+
+/**
+ * Auto-login dùng email/password lấy JWT mới — cron daily 6h sáng.
+ *
+ * Endpoint CONFIRMED từ DevTools 03/05:
+ *   POST /api/v1/users/token
+ *   Body: { email, password, country: "VN", storeData: { country: "VN" } }
+ *   Response: { status_code: 200, data: { access, refresh } }
+ *
+ * Refresh token có exp = +365 ngày → có thể dùng để renew access không cần password.
+ * Nhưng login lại bằng password mỗi 24h cũng OK (1 request/ngày).
+ */
+function autoRefreshOmsJwt() {
+  const props = PropertiesService.getScriptProperties();
+  const password = props.getProperty('OMS_PASSWORD');
+  const email = props.getProperty('OMS_EMAIL') || 'op.dept@wellhome.asia';
+  if (!password) {
+    Logger.log('🛑 OMS_PASSWORD chưa set');
+    return { ok: false, error: 'Password not set' };
+  }
+
+  const url = 'https://oms.onflow.vn/api/v1/users/token';
+  const body = { email, password, country: 'VN', storeData: { country: 'VN' } };
+
+  try {
+    const res = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { 'system': 'oms', 'country': 'VN', 'lang': 'vi', 'Accept': 'application/json' },
+      payload: JSON.stringify(body),
+      muteHttpExceptions: true,
+    });
+    const code = res.getResponseCode();
+    const respText = res.getContentText();
+    if (code !== 200) {
+      Logger.log('Login HTTP ' + code + ': ' + respText.slice(0, 300));
+      MailApp.sendEmail({
+        to: OMS_PUSH_CFG_FIXED.ALERT_EMAIL,
+        subject: '[K-Homes] 🚨 OMS auto-refresh JWT FAIL',
+        htmlBody: '<p>Login fail HTTP ' + code + '. Có thể password OMS đã đổi hoặc account bị khóa.</p>' +
+                  '<p>Action cần làm: refresh password OMS rồi gọi <code>set_oms_password&password=NEW</code></p>' +
+                  '<pre>' + respText.slice(0, 500) + '</pre>',
+      });
+      return { ok: false, code, body: respText.slice(0, 300) };
+    }
+    const json = JSON.parse(respText);
+    const access = json.data && json.data.access;
+    const refresh = json.data && json.data.refresh;
+    if (!access) {
+      Logger.log('Login OK but no access in response: ' + respText.slice(0, 500));
+      return { ok: false, error: 'No access in response', preview: respText.slice(0, 500) };
+    }
+    props.setProperty(OMS_PUSH_CFG_FIXED.PROP_JWT, access);
+    if (refresh) props.setProperty('OMS_REFRESH_TOKEN', refresh);
+    const expInfo = decodeOmsJwtExpiry_(access);
+    Logger.log('✅ JWT refreshed, expires ' + expInfo.expDate);
+    return { ok: true, expiry: expInfo, has_refresh: !!refresh };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+function setupOmsAutoRefreshTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'autoRefreshOmsJwt') ScriptApp.deleteTrigger(t);
+  });
+  // Refresh mỗi ngày 6h sáng — JWT 24h nên refresh trước khi expire
+  ScriptApp.newTrigger('autoRefreshOmsJwt').timeBased().atHour(6).everyDays(1).create();
+  Logger.log('✅ Trigger autoRefreshOmsJwt daily 6h');
+}
+
 function setupOmsPushTrigger() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (t.getHandlerFunction() === 'pushOrdersToOms') ScriptApp.deleteTrigger(t);

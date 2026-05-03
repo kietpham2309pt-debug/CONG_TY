@@ -450,6 +450,34 @@ function doPost(e) {
       const r = fetchAllOmsProvinces();
       return ghnJsonRes_(r);
     }
+    if (action === 'oms_test_api_key') {
+      const r = testOmsApiKeyAuth();
+      return ghnJsonRes_(r);
+    }
+    if (action === 'oms_test_api_key_post') {
+      const r = testOmsApiKeyAuthOnPost();
+      return ghnJsonRes_(r);
+    }
+    if (action === 'set_oms_password') {
+      const pw = e.parameter.password || '';
+      if (!pw) return ghnJsonRes_({ ok: false, error: 'password required' });
+      PropertiesService.getScriptProperties().setProperty('OMS_PASSWORD', pw);
+      const email = e.parameter.email || 'op.dept@wellhome.asia';
+      PropertiesService.getScriptProperties().setProperty('OMS_EMAIL', email);
+      return ghnJsonRes_({ ok: true, message: 'Saved OMS_PASSWORD + OMS_EMAIL', email });
+    }
+    if (action === 'oms_discover_login') {
+      const r = discoverOmsLoginEndpoint();
+      return ghnJsonRes_(r);
+    }
+    if (action === 'oms_auto_refresh_jwt') {
+      const r = autoRefreshOmsJwt();
+      return ghnJsonRes_(r);
+    }
+    if (action === 'oms_setup_auto_refresh_trigger') {
+      setupOmsAutoRefreshTrigger();
+      return ghnJsonRes_({ ok: true, message: 'Trigger autoRefreshOmsJwt daily 6h cài đặt' });
+    }
     if (action === 'cod_recon') {
       const r = runCodRecon();
       return ghnJsonRes_(r);
